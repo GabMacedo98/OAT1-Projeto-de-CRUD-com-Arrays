@@ -1,0 +1,367 @@
+// database.js - Estrutura de armazenamento e funções CRUD
+class Database {
+    constructor() {
+        this.data = [];
+        this.currentId = 1;
+    }
+
+    // CREATE - Criar um novo registro
+    create(item) {
+        return new Promise((resolve, reject) => {
+            try {
+                if (!item || typeof item !== 'object') {
+                    throw new Error('Item inválido para criação');
+                }
+
+                const newItem = {
+                    id: this.currentId++,
+                    ...item,
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString()
+                };
+
+                this.data.push(newItem);
+                resolve(newItem);
+            } catch (error) {
+                reject(error);
+            }
+        });
+    }
+
+    // READ - Buscar todos os registros ou por ID
+    read(id = null) {
+        return new Promise((resolve, reject) => {
+            try {
+                if (id === null) {
+                    resolve([...this.data]);
+                } else {
+                    const item = this.data.find(item => item.id === parseInt(id));
+                    if (item) {
+                        resolve(item);
+                    } else {
+                        reject(new Error('Registro não encontrado'));
+                    }
+                }
+            } catch (error) {
+                reject(error);
+            }
+        });
+    }
+
+    // UPDATE - Atualizar um registro existente
+    update(id, updates) {
+        return new Promise((resolve, reject) => {
+            try {
+                const index = this.data.findIndex(item => item.id === parseInt(id));
+                
+                if (index === -1) {
+                    reject(new Error('Registro não encontrado'));
+                    return;
+                }
+
+                if (!updates || typeof updates !== 'object') {
+                    throw new Error('Dados de atualização inválidos');
+                }
+
+                // Remove campos que não devem ser atualizados
+                const { id: _, createdAt: __, ...validUpdates } = updates;
+
+                this.data[index] = {
+                    ...this.data[index],
+                    ...validUpdates,
+                    updatedAt: new Date().toISOString()
+                };
+
+                resolve(this.data[index]);
+            } catch (error) {
+                reject(error);
+            }
+        });
+    }
+
+    // DELETE - Remover um registro
+    delete(id) {
+        return new Promise((resolve, reject) => {
+            try {
+                const index = this.data.findIndex(item => item.id === parseInt(id));
+                
+                if (index === -1) {
+                    reject(new Error('Registro não encontrado'));
+                    return;
+                }
+
+                const deletedItem = this.data.splice(index, 1)[0];
+                resolve(deletedItem);
+            } catch (error) {
+                reject(error);
+            }
+        });
+    }
+
+    // FIND - Buscar registros com filtros
+    find(filters = {}) {
+        return new Promise((resolve, reject) => {
+            try {
+                let results = [...this.data];
+
+                // Aplicar filtros
+                Object.keys(filters).forEach(key => {
+                    results = results.filter(item => {
+                        if (typeof filters[key] === 'function') {
+                            return filters[key](item[key]);
+                        }
+                        return item[key] === filters[key];
+                    });
+                });
+
+                resolve(results);
+            } catch (error) {
+                reject(error);
+            }
+        });
+    }
+
+    // COUNT - Contar total de registros
+    count() {
+        return new Promise((resolve) => {
+            resolve(this.data.length);
+        });
+    }
+
+    // CLEAR - Limpar todos os dados (apenas para testes)
+    clear() {
+        return new Promise((resolve) => {
+            this.data = [];
+            this.currentId = 1;
+            resolve();
+        });
+    }
+}
+
+// server.js - Implementação do servidor HTTP
+const http = require('http');
+const { URL } = require('url');
+
+class CRUDServer {
+    constructor(port = 3000) {
+        this.port = port;
+        this.database = new Database();
+        this.server = http.createServer(this.handleRequest.bind(this));
+    }
+
+    start() {
+        this.server.listen(this.port, () => {
+            console.log(`Servidor CRUD rodando na porta ${this.port}`);
+            console.log(`Endpoints disponíveis:`);
+            console.log(`- GET /items - Listar todos os itens`);
+            console.log(`- GET /items/:id - Buscar item por ID`);
+            console.log(`- POST /items - Criar novo item`);
+            console.log(`- PUT /items/:id - Atualizar item`);
+            console.log(`- DELETE /items/:id - Deletar item`);
+        });
+    }
+
+    async handleRequest(req, res) {
+        const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
+        const pathname = parsedUrl.pathname;
+        const method = req.method;
+        const id = pathname.split('/')[2];
+
+        // Configurar CORS
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+        if (method === 'OPTIONS') {
+            res.writeHead(200);
+            res.end();
+            return;
+        }
+
+        // Roteamento
+        if (pathname === '/items' || pathname.startsWith('/items/')) {
+            await this.handleItemsRequest(req, res, method, id);
+        } else {
+            this.sendResponse(res, 404, { error: 'Endpoint não encontrado' });
+        }
+    }
+
+    async handleItemsRequest(req, res, method, id) {
+        try {
+            let body = '';
+
+            req.on('data', chunk => {
+                body += chunk.toString();
+            });
+
+            req.on('end', async () => {
+                try {
+                    let data = {};
+                    if (body) {
+                        data = JSON.parse(body);
+                    }
+
+                    let result;
+
+                    switch (method) {
+                        case 'GET':
+                            if (id) {
+                                result = await this.database.read(id);
+                            } else {
+                                result = await this.database.read();
+                            }
+                            this.sendResponse(res, 200, result);
+                            break;
+
+                        case 'POST':
+                            if (!id) {
+                                result = await this.database.create(data);
+                                this.sendResponse(res, 201, result);
+                            } else {
+                                this.sendResponse(res, 400, { error: 'Método não permitido' });
+                            }
+                            break;
+
+                        case 'PUT':
+                            if (id) {
+                                result = await this.database.update(id, data);
+                                this.sendResponse(res, 200, result);
+                            } else {
+                                this.sendResponse(res, 400, { error: 'ID é obrigatório' });
+                            }
+                            break;
+
+                        case 'DELETE':
+                            if (id) {
+                                result = await this.database.delete(id);
+                                this.sendResponse(res, 200, result);
+                            } else {
+                                this.sendResponse(res, 400, { error: 'ID é obrigatório' });
+                            }
+                            break;
+
+                        default:
+                            this.sendResponse(res, 405, { error: 'Método não permitido' });
+                    }
+                } catch (error) {
+                    this.handleError(res, error);
+                }
+            });
+        } catch (error) {
+            this.handleError(res, error);
+        }
+    }
+
+    sendResponse(res, statusCode, data) {
+        res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(data, null, 2));
+    }
+
+    handleError(res, error) {
+        console.error('Erro:', error.message);
+
+        if (error.message.includes('não encontrado')) {
+            this.sendResponse(res, 404, { error: error.message });
+        } else if (error.message.includes('inválido')) {
+            this.sendResponse(res, 400, { error: error.message });
+        } else {
+            this.sendResponse(res, 500, { error: 'Erro interno do servidor' });
+        }
+    }
+}
+
+// clientExample.js - Exemplo de uso
+class CRUDClient {
+    constructor(baseURL = 'http://localhost:3000') {
+        this.baseURL = baseURL;
+    }
+
+    async request(endpoint, options = {}) {
+        const url = `${this.baseURL}${endpoint}`;
+        const response = await fetch(url, {
+            headers: {
+                'Content-Type': 'application/json',
+                ...options.headers
+            },
+            ...options
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        return response.json();
+    }
+
+    async createItem(item) {
+        return this.request('/items', {
+            method: 'POST',
+            body: JSON.stringify(item)
+        });
+    }
+
+    async getItems() {
+        return this.request('/items');
+    }
+
+    async getItem(id) {
+        return this.request(`/items/${id}`);
+    }
+
+    async updateItem(id, updates) {
+        return this.request(`/items/${id}`, {
+            method: 'PUT',
+            body: JSON.stringify(updates)
+        });
+    }
+
+    async deleteItem(id) {
+        return this.request(`/items/${id}`, {
+            method: 'DELETE'
+        });
+    }
+}
+
+// Exemplo de uso
+if (require.main === module) {
+    const server = new CRUDServer(3000);
+    server.start();
+
+    // Exemplo de testes após iniciar o servidor
+    setTimeout(async () => {
+        const client = new CRUDClient();
+        
+        try {
+            // Teste de criação
+            console.log('Criando itens...');
+            const item1 = await client.createItem({ name: 'Item 1', category: 'A' });
+            const item2 = await client.createItem({ name: 'Item 2', category: 'B' });
+            console.log('Itens criados:', item1, item2);
+
+            // Teste de leitura
+            console.log('Listando todos os itens...');
+            const allItems = await client.getItems();
+            console.log('Todos os itens:', allItems);
+
+            // Teste de atualização
+            console.log('Atualizando item...');
+            const updatedItem = await client.updateItem(item1.id, { name: 'Item 1 Atualizado' });
+            console.log('Item atualizado:', updatedItem);
+
+            // Teste de deleção
+            console.log('Deletando item...');
+            const deletedItem = await client.deleteItem(item2.id);
+            console.log('Item deletado:', deletedItem);
+
+            // Lista final
+            console.log('Lista final de itens:');
+            const finalItems = await client.getItems();
+            console.log(finalItems);
+
+        } catch (error) {
+            console.error('Erro no teste:', error.message);
+        }
+    }, 1000);
+}
+
+module.exports = { Database, CRUDServer, CRUDClient };
